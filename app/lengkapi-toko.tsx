@@ -27,6 +27,7 @@ import OpenHoursEditor, {
     scheduleToOpenHours,
     validateSchedule,
 } from '../components/OpenHoursEditor';
+import StoreLocationPicker, { PickedStoreLocation } from '../components/StoreLocationPicker';
 import { api, MerchantStore } from '../lib/api';
 import { COLORS } from '../lib/theme';
 
@@ -52,6 +53,7 @@ export default function LengkapiTokoScreen() {
     const [uploadingCover, setUploadingCover] = useState(false);
 
     const [locating, setLocating] = useState(false);
+    const [pickerOpen, setPickerOpen] = useState(false);
     const [saving, setSaving] = useState(false);
 
     const alert = useAlertSheet();
@@ -209,6 +211,14 @@ export default function LengkapiTokoScreen() {
         } finally {
             setLocating(false);
         }
+    };
+
+    // Hasil dari pencarian alamat / pilih lewat peta
+    const handlePicked = (p: PickedStoreLocation) => {
+        setLat(p.latitude);
+        setLng(p.longitude);
+        setAddress(p.address);
+        setPickerOpen(false);
     };
 
     // ============================================================
@@ -434,7 +444,19 @@ export default function LengkapiTokoScreen() {
                     <View style={styles.field}>
                         <Text style={styles.label}>Lokasi toko</Text>
                         <TouchableOpacity
-                            style={styles.locButton}
+                            style={styles.pickButton}
+                            activeOpacity={0.85}
+                            onPress={() => setPickerOpen(true)}
+                            disabled={saving}
+                        >
+                            <Ionicons name="search" size={20} color="#fff" />
+                            <Text style={styles.pickButtonText}>
+                                {hasLocation ? 'Ubah lewat pencarian / peta' : 'Cari alamat & pilih di peta'}
+                            </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.locButton, { marginTop: 10 }]}
                             activeOpacity={0.8}
                             onPress={useMyLocation}
                             disabled={locating || saving}
@@ -485,6 +507,14 @@ export default function LengkapiTokoScreen() {
                     </TouchableOpacity>
                 </ScrollView>
             </KeyboardAvoidingView>
+
+            <StoreLocationPicker
+                visible={pickerOpen}
+                initial={hasLocation ? { latitude: lat!, longitude: lng! } : null}
+                initialAddress={address}
+                onClose={() => setPickerOpen(false)}
+                onConfirm={handlePicked}
+            />
 
             <LoadingModal visible={saving} />
             <AlertSheet
@@ -594,6 +624,16 @@ const styles = StyleSheet.create({
     },
     textArea: { paddingTop: 14, paddingBottom: 14, textAlignVertical: 'top' },
 
+    pickButton: {
+        height: 52,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        borderRadius: 14,
+        backgroundColor: COLORS.primary,
+    },
+    pickButtonText: { fontSize: 15, fontWeight: '700', color: '#fff' },
     locButton: {
         height: 52,
         flexDirection: 'row',

@@ -145,7 +145,13 @@ export interface ProfileResponse {
 // ============================================================
 // Response types — Merchant
 // ============================================================
-export type OpenHours = Record<string, { open: string; close: string } | null>;
+
+/**
+ * Jam buka per hari, nama hari Indonesia huruf kecil, nilai string "HH:MM-HH:MM".
+ * Contoh: { senin: '08:00-22:00', minggu: '10:00-23:00' }
+ * (sesuai data di merchant_profiles.open_hours)
+ */
+export type OpenHours = Record<string, string>;
 
 export interface MerchantStore {
     user_id: string;
@@ -266,7 +272,11 @@ export interface OrderItem {
     variant?: string | null;
     qty: number;
     price: number;
+    notes?: string | null;
 }
+
+/** Status respons toko untuk pesanan makanan. null = bukan pesanan makanan / belum diteruskan ke toko. */
+export type MerchantResponseStatus = 'waiting' | 'accepted' | 'rejected';
 
 export interface OrderResponse {
     id: number;
@@ -302,6 +312,14 @@ export interface OrderResponse {
     tariff_code?: string | null;
     option_name?: string | null;
     send_code?: string | null;
+
+    // ── Alur "merchant dulu" ──
+    merchant_status?: MerchantResponseStatus | null;
+    merchant_notified_at?: string | null;
+    merchant_responded_at?: string | null;
+    prep_minutes?: number | null;
+    /** Waktu toko menandai pesanan siap diambil driver. */
+    merchant_ready_at?: string | null;
 
     accepted_at?: string | null;
     arrived_at?: string | null;
@@ -375,12 +393,11 @@ export interface ChatMessage {
  */
 export interface WalletInfo {
     balance: number;
-    cash_debt: number;         // ✅ WAJIB — merchant & driver sama-sama punya
-    net_balance: number;       // ✅ WAJIB — balance - cash_debt
-    pending_balance: number;   // ✅ WAJIB — saldo belum settle
+    cash_debt: number;
+    net_balance: number;
+    pending_balance: number;
     updated_at: string;
 
-    // Field opsional (kalau backend mengirim data statistik tambahan)
     total_earning?: number;
     total_commission_paid?: number;
     total_commission_owed?: number;
@@ -451,12 +468,17 @@ async function request<T>(
         if (token) headers.Authorization = `Bearer ${token}`;
     }
 
+    if (__DEV_SAFE) {
+        console.log(`[api] ${method} ${path}${auth ? ' (auth)' : ''}`);
+    }
+
     const res = await fetchWithTimeout(`${BASE_URL}${path}`, {
         method,
         headers,
+        // body harus OBJEK biasa — di-stringify di sini (jangan JSON.stringify di pemanggil)
         body: isForm
             ? (body as FormData)
-            : body
+            : body !== undefined
                 ? JSON.stringify(body)
                 : undefined,
     });
@@ -480,6 +502,10 @@ async function request<T>(
             (res.status === 401
                 ? 'Email atau kata sandi salah.'
                 : `Request failed (${res.status})`);
+
+        if (__DEV_SAFE) {
+            console.warn(`[api] GAGAL ${method} ${path} → ${res.status}: ${msg}`);
+        }
         throw new Error(msg);
     }
     return json.data as T;
@@ -613,6 +639,21 @@ export const api = {
             { uri, name: fileName, type: mimeType }
         );
     },
+
+    /**
+     * Simpan push token ke profil (kolom profiles.fcm_token) — sama seperti aplikasi customer.
+     * Backend mengirim notifikasi dengan membaca kolom ini.
+     * Parameter kedua (platform) dipertahankan agar pemanggil lama tidak error, tidak dikirim.
+     *
+     * Versi lama memanggil '/merchant/push-token' (route tidak ada, tanpa auth,
+     * dan body di-stringify dua kali) sehingga server membalas 500.
+     */
+    registerPushToken: (token: string, _platform?: string) =>
+        request<ProfileResponse>('/api/profiles/me', {
+            method: 'PUT',
+            body: { fcm_token: token },
+            auth: true,
+        }),
 
     getProfileById: (userId: string) =>
         request<ProfileResponse>(`/api/profiles/${userId}`, { auth: true }),
@@ -750,14 +791,47 @@ export const api = {
             { auth: true }
         ),
 
+    /**
+     * TERIMA pesanan makanan (alur "merchant dulu").
+     * Setelah ini server baru mencari driver.
+     * @param prepMinutes estimasi menit menyiapkan pesanan (1–180), opsional
+     */
+    acceptOrder: (orderId: number, prepMinutes?: number) =>
+        request<OrderResponse>(`/api/orders/${orderId}/merchant-accept`, {
+            method: 'POST',
+            body: { prep_minutes: prepMinutes },
+            auth: true,
+        }),
+
+    /**
+     * TOLAK pesanan makanan. Order dibatalkan dan customer diberi tahu.
+     * @param reason alasan (maks. 200 karakter), opsional
+     */
+    rejectOrder: (orderId: number, reason?: string) =>
+        request<OrderResponse>(`/api/orders/${orderId}/merchant-reject`, {
+            method: 'POST',
+            body: { reason },
+            auth: true,
+        }),
+
+    /**
+     * Tandai pesanan SIAP DIAMBIL. Driver (kalau sudah ada) dan customer diberi notifikasi.
+     * Hanya untuk pesanan yang sudah diterima toko dan belum diambil driver.
+     */
+    readyOrder: (orderId: number) =>
+        request<OrderResponse>(`/api/orders/${orderId}/merchant-ready`, {
+            method: 'POST',
+            body: {},
+            auth: true,
+        }),
+
+    /**
+     * Ubah status order. Toko hanya boleh 'cancelled'.
+     * 'accepted' sudah tidak diterima server — pakai acceptOrder() di atas.
+     */
     updateOrderStatus: (
         orderId: number,
-        status:
-            | 'accepted'
-            | 'arrived'
-            | 'in_progress'
-            | 'completed'
-            | 'cancelled',
+        status: 'arrived' | 'in_progress' | 'completed' | 'cancelled',
         reason?: string,
         sendCode?: string
     ) =>

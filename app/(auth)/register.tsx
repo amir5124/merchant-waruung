@@ -1,4 +1,5 @@
-import { api, saveToken } from '../../lib/api';
+// app/(auth)/register.tsx
+import { api, saveToken, getToken } from '../../lib/api';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
@@ -16,6 +17,7 @@ import {
     TouchableOpacity,
     TouchableWithoutFeedback,
     View,
+    Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -55,16 +57,60 @@ export default function RegisterScreen() {
         setErrorTitle(title);
         setErrorMessage(message);
         // Di iOS, modal baru tidak bisa muncul saat modal loading masih menutup
-        setTimeout(() => setErrorModalVisible(true), Platform.OS === 'ios' ? 400 : 0);
+        setTimeout(
+            () => setErrorModalVisible(true),
+            Platform.OS === 'ios' ? 400 : 0
+        );
+    };
+
+    // ============================================================
+    // Buka Syarat & Ketentuan di browser
+    // ============================================================
+    const TERMS_URL = isMerchant
+        ? 'https://waruung.id/privacy-merchant'
+        : 'https://waruung.id/privacy';
+
+    const openTerms = async () => {
+        console.log('[REGISTER] Buka S&K:', TERMS_URL);
+
+        try {
+            const supported = await Linking.canOpenURL(TERMS_URL);
+            if (supported) {
+                await Linking.openURL(TERMS_URL);
+            } else {
+                console.warn('[REGISTER] URL tidak didukung:', TERMS_URL);
+                showErrorModal(
+                    'Tidak Bisa Membuka Link',
+                    `Buka manual di browser:\n${TERMS_URL}`
+                );
+            }
+        } catch (err: any) {
+            console.error('[REGISTER] Gagal buka link:', err?.message);
+            showErrorModal(
+                'Gagal Buka Link',
+                `Silakan buka manual di browser:\n${TERMS_URL}`
+            );
+        }
     };
 
     const handleSignUp = async () => {
-        // Validasi dasar
+        console.log('═══════════════════════════════════════════');
+        console.log('📝 [REGISTER] START');
+        console.log('═══════════════════════════════════════════');
+
+        // ============================================================
+        // VALIDASI DASAR
+        // ============================================================
         if (!agree) {
-            showErrorModal('Belum Disetujui', 'Kamu harus menyetujui Syarat & Ketentuan dulu.');
+            console.log('⚠️ [REGISTER] Validasi gagal: S&K belum disetujui');
+            showErrorModal(
+                'Belum Disetujui',
+                'Kamu harus menyetujui Syarat & Ketentuan dulu.'
+            );
             return;
         }
         if (!name.trim() || !email.trim() || !password.trim()) {
+            console.log('⚠️ [REGISTER] Validasi gagal: field wajib kosong');
             showErrorModal(
                 'Data belum lengkap',
                 `${isMerchant ? 'Nama toko' : 'Nama'}, email, dan kata sandi wajib diisi.`
@@ -72,63 +118,184 @@ export default function RegisterScreen() {
             return;
         }
         if (isMerchant && !phone.trim()) {
-            showErrorModal('Data belum lengkap', 'Nomor HP wajib diisi untuk akun merchant.');
+            console.log('⚠️ [REGISTER] Validasi gagal: nomor HP kosong');
+            showErrorModal(
+                'Data belum lengkap',
+                'Nomor HP wajib diisi untuk akun merchant.'
+            );
             return;
         }
         if (password.length < 6) {
-            showErrorModal('Kata Sandi Terlalu Pendek', 'Kata sandi minimal 6 karakter.');
+            console.log('⚠️ [REGISTER] Validasi gagal: password < 6 karakter');
+            showErrorModal(
+                'Kata Sandi Terlalu Pendek',
+                'Kata sandi minimal 6 karakter.'
+            );
             return;
         }
 
         setLoading(true);
-        console.log('[REGISTER] Mulai proses daftar:', email.trim().toLowerCase(), 'role:', role);
 
         try {
-            // 1. Register ke backend
-            console.log('[REGISTER] Request ke /api/auth/register...');
+            // ============================================================
+            // 1. REGISTER ke backend
+            // ============================================================
+            console.log(
+                '🟡 [REGISTER] Step 1: POST /api/auth/register untuk:',
+                email.trim().toLowerCase(),
+                '| role:',
+                role
+            );
+
             const res = await api.register({
                 email: email.trim().toLowerCase(),
                 password,
                 full_name: name.trim(),
                 role,
             });
-            console.log('[REGISTER] Response berhasil:', {
+
+            console.log('🟢 [REGISTER] Step 1 OK — Response:', {
                 userId: res.userId,
                 role: res.role,
                 tokenLength: res.token?.length,
+                tokenPreview: res.token
+                    ? res.token.substring(0, 30) + '...'
+                    : 'KOSONG',
             });
 
-            // 2. Simpan JWT token
-            await saveToken(res.token);
-            console.log('[REGISTER] JWT token tersimpan');
+            // ============================================================
+            // 2. SIMPAN TOKEN
+            // ============================================================
+            console.log('🟡 [REGISTER] Step 2: saveToken()...');
 
-            // 3. Update nomor HP kalau diisi (gagal tidak menghalangi registrasi)
+            if (!res.token) {
+                console.error('🔴 [REGISTER] Token KOSONG dari backend!');
+                throw new Error('Token tidak diterima dari server');
+            }
+
+            await saveToken(res.token);
+
+            console.log('🟢 [REGISTER] Step 2 OK — saveToken() selesai');
+
+            // ============================================================
+            // ✅ 2b. VERIFIKASI: cek apakah token benar-benar tersimpan
+            // ============================================================
+            const storedToken = await getToken();
+            console.log('🟢 [REGISTER] Step 2b — Verifikasi token tersimpan:', {
+                exists: !!storedToken,
+                length: storedToken?.length ?? 0,
+                match: storedToken === res.token,
+                preview: storedToken
+                    ? storedToken.substring(0, 30) + '...'
+                    : 'KOSONG',
+            });
+
+            if (!storedToken) {
+                console.error(
+                    '🔴 [REGISTER] Token TIDAK TERSIMPAN setelah saveToken()!'
+                );
+                throw new Error(
+                    'Token gagal disimpan di perangkat. Coba lagi.'
+                );
+            }
+
+            if (storedToken !== res.token) {
+                console.warn(
+                    '⚠️ [REGISTER] Token tersimpan berbeda dari yang diterima!'
+                );
+            }
+
+            // Cek langsung di storage (web: localStorage, native: SecureStore)
+            if (Platform.OS === 'web') {
+                const lsToken =
+                    typeof window !== 'undefined'
+                        ? window.localStorage.getItem('auth_token')
+                        : null;
+                console.log(
+                    '🟢 [REGISTER] Step 2c — localStorage auth_token:',
+                    {
+                        exists: !!lsToken,
+                        length: lsToken?.length ?? 0,
+                    }
+                );
+            }
+
+            // ============================================================
+            // 3. UPDATE NOMOR HP (kalau diisi)
+            // ============================================================
             if (phone.trim()) {
+                console.log('🟡 [REGISTER] Step 3: update nomor HP...');
                 try {
                     await api.updateProfile({ phone: phone.trim() });
-                    console.log('[REGISTER] Nomor HP tersimpan');
+                    console.log('🟢 [REGISTER] Step 3 OK — Nomor HP tersimpan');
                 } catch (err: any) {
-                    console.warn('[REGISTER] Gagal simpan nomor HP:', err.message);
+                    console.warn(
+                        '⚠️ [REGISTER] Gagal simpan nomor HP (lanjut):',
+                        err.message
+                    );
                 }
+            } else {
+                console.log(
+                    '⏭️ [REGISTER] Step 3 skipped — nomor HP kosong'
+                );
             }
 
-            // 4. Cache profil (TERPISAH dari registrasi: kalau gagal,
-            //    akun tetap berhasil dibuat)
+            // ============================================================
+            // 4. SIMPAN PROFIL ke AsyncStorage
+            // ============================================================
+            console.log(
+                '🟡 [REGISTER] Step 4: ambil profil & cache AsyncStorage...'
+            );
+
             try {
                 const profile = await api.me();
-                await AsyncStorage.setItem('profile', JSON.stringify(profile));
-                console.log('[REGISTER] Profil tersimpan di AsyncStorage');
+                await AsyncStorage.setItem(
+                    'profile',
+                    JSON.stringify(profile)
+                );
+
+                console.log('🟢 [REGISTER] Step 4 OK — Profil tersimpan');
+
+                // Verifikasi profil tersimpan
+                const cachedProfile =
+                    await AsyncStorage.getItem('profile');
+                console.log('🟢 [REGISTER] Step 4b — Verifikasi profil:', {
+                    exists: !!cachedProfile,
+                    length: cachedProfile?.length ?? 0,
+                });
             } catch (postErr: any) {
-                console.warn('[REGISTER] Gagal cache profil (registrasi tetap lanjut):', postErr?.message);
+                console.warn(
+                    '⚠️ [REGISTER] Gagal cache profil (registrasi tetap lanjut):',
+                    postErr?.message
+                );
             }
 
-            // 5. Redirect sesuai role
-            // 5. Redirect ke tabs (merchant pakai tab utama yang sama)
-            console.log('[REGISTER] Registrasi sukses, redirect ke tabs');
+            // ============================================================
+            // 5. REDIRECT ke tabs
+            //    (push notif & tracker akan di-handle oleh _layout.tsx
+            //     setelah masuk /(tabs))
+            // ============================================================
+            console.log('🟡 [REGISTER] Step 5: redirect ke /(tabs)');
+
             router.replace('/(tabs)' as any);
+
+            console.log('🟢 [REGISTER] Step 5 OK — Redirect dipanggil');
+            console.log('═══════════════════════════════════════════');
+            console.log('✅ [REGISTER] SUKSES TOTAL');
+            console.log('═══════════════════════════════════════════');
         } catch (err: any) {
-            console.error('[REGISTER] Gagal:', err.message);
-            showErrorModal('Gagal Daftar', err.message || 'Terjadi kesalahan, coba lagi.');
+            console.error('═══════════════════════════════════════════');
+            console.error('🔴 [REGISTER] GAGAL');
+            console.error('═══════════════════════════════════════════');
+            console.error('[REGISTER] Error name:', err?.name);
+            console.error('[REGISTER] Error message:', err?.message);
+            console.error('[REGISTER] Error stack:', err?.stack);
+            console.error('═══════════════════════════════════════════');
+
+            showErrorModal(
+                'Gagal Daftar',
+                err.message || 'Terjadi kesalahan, coba lagi.'
+            );
         } finally {
             setLoading(false);
         }
@@ -151,39 +318,65 @@ export default function RegisterScreen() {
                         <TouchableOpacity
                             style={styles.backButton}
                             activeOpacity={0.7}
-                            onPress={() => (router.canGoBack() ? router.back() : router.replace('/login' as any))}
+                            onPress={() =>
+                                router.canGoBack()
+                                    ? router.back()
+                                    : router.replace('/login' as any)
+                            }
                         >
-                            <Ionicons name="chevron-back" size={22} color={COLORS.textDark} />
+                            <Ionicons
+                                name="chevron-back"
+                                size={22}
+                                color={COLORS.textDark}
+                            />
                         </TouchableOpacity>
 
                         <View style={styles.stepWrapper}>
                             <View style={styles.stepBars}>
-                                <View style={[styles.stepBar, styles.stepBarActive]} />
+                                <View
+                                    style={[
+                                        styles.stepBar,
+                                        styles.stepBarActive,
+                                    ]}
+                                />
                                 <View style={styles.stepBar} />
                             </View>
-                            <Text style={styles.stepText}>Langkah 1 dari 2</Text>
+                            <Text style={styles.stepText}>
+                                Langkah 1 dari 2
+                            </Text>
                         </View>
                     </View>
 
                     <View style={styles.header}>
                         <Text style={styles.title}>Buat akun merchant</Text>
                         <Text style={styles.subtitle}>
-                            Daftarkan tokomu dan mulai terima pesanan dari pelanggan sekitar.
+                            Daftarkan tokomu dan mulai terima pesanan dari
+                            pelanggan sekitar.
                         </Text>
                     </View>
 
                     {/* Nama */}
                     <View style={styles.field}>
-                        <Text style={styles.label}>{isMerchant ? 'Nama toko' : 'Nama lengkap'}</Text>
+                        <Text style={styles.label}>
+                            {isMerchant ? 'Nama toko' : 'Nama lengkap'}
+                        </Text>
                         <View style={styles.inputWrapper}>
                             <Ionicons
-                                name={isMerchant ? 'storefront-outline' : 'person-outline'}
+                                name={
+                                    isMerchant
+                                        ? 'storefront-outline'
+                                        : 'person-outline'
+                                }
                                 size={22}
                                 color={COLORS.textMuted}
                             />
                             <TextInput
                                 style={styles.inputInner}
-                                placeholder={isMerchant ? 'Nama toko kamu' : 'Nama kamu'}
+                                placeholder={
+                                    isMerchant
+                                        ? 'Nama toko kamu'
+                                        : 'Nama kamu'
+                                }
                                 placeholderTextColor={COLORS.placeholder}
                                 value={name}
                                 onChangeText={setName}
@@ -199,7 +392,10 @@ export default function RegisterScreen() {
                             <Text style={styles.phonePrefixText}>+62</Text>
                             <View style={styles.phoneDivider} />
                             <TextInput
-                                style={[styles.inputInner, { marginLeft: 0 }]}
+                                style={[
+                                    styles.inputInner,
+                                    { marginLeft: 0 },
+                                ]}
                                 placeholder="81234567890"
                                 placeholderTextColor={COLORS.placeholder}
                                 keyboardType="phone-pad"
@@ -214,7 +410,11 @@ export default function RegisterScreen() {
                     <View style={styles.field}>
                         <Text style={styles.label}>Email</Text>
                         <View style={styles.inputWrapper}>
-                            <Ionicons name="mail-outline" size={22} color={COLORS.textMuted} />
+                            <Ionicons
+                                name="mail-outline"
+                                size={22}
+                                color={COLORS.textMuted}
+                            />
                             <TextInput
                                 style={styles.inputInner}
                                 placeholder="contoh@gmail.com"
@@ -233,7 +433,11 @@ export default function RegisterScreen() {
                     <View style={styles.field}>
                         <Text style={styles.label}>Kata sandi</Text>
                         <View style={styles.inputWrapper}>
-                            <Ionicons name="lock-closed-outline" size={22} color={COLORS.textMuted} />
+                            <Ionicons
+                                name="lock-closed-outline"
+                                size={22}
+                                color={COLORS.textMuted}
+                            />
                             <TextInput
                                 style={styles.inputInner}
                                 placeholder="Buat kata sandi"
@@ -244,9 +448,16 @@ export default function RegisterScreen() {
                                 onChangeText={setPassword}
                                 editable={!loading}
                             />
-                            <TouchableOpacity onPress={() => setShowPassword((v) => !v)} hitSlop={8}>
+                            <TouchableOpacity
+                                onPress={() => setShowPassword((v) => !v)}
+                                hitSlop={8}
+                            >
                                 <Ionicons
-                                    name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                                    name={
+                                        showPassword
+                                            ? 'eye-off-outline'
+                                            : 'eye-outline'
+                                    }
                                     size={22}
                                     color={COLORS.textMuted}
                                 />
@@ -261,21 +472,38 @@ export default function RegisterScreen() {
                         activeOpacity={0.8}
                         onPress={() => setAgree((v) => !v)}
                     >
-                        <View style={[styles.checkbox, agree && styles.checkboxChecked]}>
-                            {agree && <Ionicons name="checkmark" size={16} color="#ffffff" />}
+                        <View
+                            style={[
+                                styles.checkbox,
+                                agree && styles.checkboxChecked,
+                            ]}
+                        >
+                            {agree && (
+                                <Ionicons
+                                    name="checkmark"
+                                    size={16}
+                                    color="#ffffff"
+                                />
+                            )}
                         </View>
                         <Text style={styles.agreeText}>
                             Saya setuju dengan{' '}
-                            <Text style={styles.agreeLink} onPress={() => router.push('/')}>
+                            <Text
+                                style={styles.agreeLink}
+                                onPress={openTerms}
+                            >
                                 Syarat & Ketentuan
                             </Text>
                             {isMerchant ? ' Waruung Merchant' : ' Waruung'}
                         </Text>
                     </TouchableOpacity>
 
-                    {/* Tombol Daftar (loading pakai modal) */}
+                    {/* Tombol Daftar */}
                     <TouchableOpacity
-                        style={[styles.primaryButton, loading && styles.primaryButtonDisabled]}
+                        style={[
+                            styles.primaryButton,
+                            loading && styles.primaryButtonDisabled,
+                        ]}
                         activeOpacity={0.85}
                         onPress={handleSignUp}
                         disabled={loading}
@@ -283,12 +511,17 @@ export default function RegisterScreen() {
                         <Text style={styles.primaryButtonText}>Daftar</Text>
                     </TouchableOpacity>
 
-                    {/* Spacer supaya footer menempel di bawah */}
                     <View style={{ flex: 1, minHeight: 32 }} />
 
                     <View style={styles.footer}>
-                        <Text style={styles.footerText}>Sudah punya akun? </Text>
-                        <TouchableOpacity onPress={() => router.push('/login' as any)}>
+                        <Text style={styles.footerText}>
+                            Sudah punya akun?{' '}
+                        </Text>
+                        <TouchableOpacity
+                            onPress={() =>
+                                router.push('/login' as any)
+                            }
+                        >
                             <Text style={styles.footerLink}>Masuk</Text>
                         </TouchableOpacity>
                     </View>
@@ -304,7 +537,10 @@ export default function RegisterScreen() {
             >
                 <View style={styles.loadingOverlay}>
                     <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color={COLORS.primary} />
+                        <ActivityIndicator
+                            size="large"
+                            color={COLORS.primary}
+                        />
                     </View>
                 </View>
             </Modal>
@@ -318,7 +554,9 @@ export default function RegisterScreen() {
                 onRequestClose={() => setErrorModalVisible(false)}
             >
                 <View style={styles.sheetOverlay}>
-                    <TouchableWithoutFeedback onPress={() => setErrorModalVisible(false)}>
+                    <TouchableWithoutFeedback
+                        onPress={() => setErrorModalVisible(false)}
+                    >
                         <View style={{ flex: 1 }} />
                     </TouchableWithoutFeedback>
 
@@ -327,17 +565,25 @@ export default function RegisterScreen() {
                             onPress={() => setErrorModalVisible(false)}
                             style={styles.sheetCloseButton}
                         >
-                            <Ionicons name="close" size={24} color="#1c1c1c" />
+                            <Ionicons
+                                name="close"
+                                size={24}
+                                color="#1c1c1c"
+                            />
                         </TouchableOpacity>
 
                         <Text style={styles.sheetTitle}>{errorTitle}</Text>
-                        <Text style={styles.sheetDescription}>{errorMessage}</Text>
+                        <Text style={styles.sheetDescription}>
+                            {errorMessage}
+                        </Text>
 
                         <TouchableOpacity
                             onPress={() => setErrorModalVisible(false)}
                             style={styles.sheetButton}
                         >
-                            <Text style={styles.sheetButtonText}>Mengerti</Text>
+                            <Text style={styles.sheetButtonText}>
+                                Mengerti
+                            </Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -346,6 +592,9 @@ export default function RegisterScreen() {
     );
 }
 
+// ============================================================
+// STYLES
+// ============================================================
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.bg },
     scrollContent: {
@@ -374,9 +623,18 @@ const styles = StyleSheet.create({
     },
     stepWrapper: { flexDirection: 'row', alignItems: 'center' },
     stepBars: { flexDirection: 'row', gap: 5, marginRight: 10 },
-    stepBar: { width: 24, height: 4, borderRadius: 2, backgroundColor: COLORS.stepOff },
+    stepBar: {
+        width: 24,
+        height: 4,
+        borderRadius: 2,
+        backgroundColor: COLORS.stepOff,
+    },
     stepBarActive: { backgroundColor: COLORS.primary },
-    stepText: { fontSize: 13, fontWeight: '600', color: COLORS.textMuted },
+    stepText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: COLORS.textMuted,
+    },
 
     // ── Header ──
     header: { marginBottom: 24 },
@@ -387,11 +645,20 @@ const styles = StyleSheet.create({
         marginBottom: 8,
         letterSpacing: -0.5,
     },
-    subtitle: { fontSize: 15, color: COLORS.textMuted, lineHeight: 22 },
+    subtitle: {
+        fontSize: 15,
+        color: COLORS.textMuted,
+        lineHeight: 22,
+    },
 
     // ── Field ──
     field: { marginBottom: 16 },
-    label: { fontSize: 14, fontWeight: '700', color: COLORS.textDark, marginBottom: 8 },
+    label: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: COLORS.textDark,
+        marginBottom: 8,
+    },
     inputWrapper: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -409,7 +676,11 @@ const styles = StyleSheet.create({
         color: COLORS.textDark,
         paddingVertical: 0,
     },
-    phonePrefixText: { fontSize: 15, color: COLORS.textDark, fontWeight: '700' },
+    phonePrefixText: {
+        fontSize: 15,
+        color: COLORS.textDark,
+        fontWeight: '700',
+    },
     phoneDivider: {
         width: 1,
         height: 22,
@@ -419,7 +690,12 @@ const styles = StyleSheet.create({
     hint: { fontSize: 12, color: COLORS.textMuted, marginTop: 8 },
 
     // ── Checkbox ──
-    agreeRow: { flexDirection: 'row', alignItems: 'flex-start', marginTop: 4, marginBottom: 22 },
+    agreeRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        marginTop: 4,
+        marginBottom: 22,
+    },
     checkbox: {
         width: 24,
         height: 24,
@@ -431,8 +707,16 @@ const styles = StyleSheet.create({
         marginRight: 12,
         marginTop: 1,
     },
-    checkboxChecked: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
-    agreeText: { fontSize: 14, color: COLORS.textMuted, flexShrink: 1, lineHeight: 22 },
+    checkboxChecked: {
+        backgroundColor: COLORS.primary,
+        borderColor: COLORS.primary,
+    },
+    agreeText: {
+        fontSize: 14,
+        color: COLORS.textMuted,
+        flexShrink: 1,
+        lineHeight: 22,
+    },
     agreeLink: { fontWeight: '700', color: COLORS.secondary },
 
     // ── Button ──
@@ -444,12 +728,24 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     primaryButtonDisabled: { opacity: 0.6 },
-    primaryButtonText: { color: '#ffffff', fontSize: 16, fontWeight: '700' },
+    primaryButtonText: {
+        color: '#ffffff',
+        fontSize: 16,
+        fontWeight: '700',
+    },
 
     // ── Footer ──
-    footer: { flexDirection: 'row', justifyContent: 'center', paddingBottom: 8 },
+    footer: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        paddingBottom: 8,
+    },
     footerText: { fontSize: 14, color: COLORS.textMuted },
-    footerLink: { fontSize: 14, fontWeight: '700', color: COLORS.secondary },
+    footerLink: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: COLORS.secondary,
+    },
 
     // ── Style Loading Modal ──
     loadingOverlay: {

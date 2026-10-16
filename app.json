@@ -4,11 +4,11 @@
     "slug": "merchant-waruung",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/images/merchant.png",
     "scheme": "merchantwaruung",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/images/merchant.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -21,15 +21,14 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/images/merchant.png",
         "backgroundColor": "#ffffff"
       },
       "package": "com.waruung.merchant",
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "ACCESS_COARSE_LOCATION"
       ]
     },
     "web": {
@@ -44,7 +43,24 @@
         {
           "locationAlwaysAndWhenInUsePermission": "Izinkan Merchant Waruung mengakses lokasi Anda."
         }
-      ]
+      ],
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/sounds/merchant_order.mp3"
+          ]
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Izinkan Merchant Waruung mengakses foto Anda.",
+          "savePhotosPermission": "Izinkan Merchant Waruung menyimpan foto ke galeri Anda.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
@@ -54,6 +70,7 @@
       "eas": {
         "projectId": "6e948c5a-78a2-42d2-9d32-6754c1dcbf66"
       }
-    }
+    },
+    "owner": "amirku"
   }
 }

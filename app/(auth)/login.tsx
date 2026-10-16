@@ -1,4 +1,5 @@
-import { api, saveToken } from '../../lib/api';
+// app/(auth)/login.tsx
+import { api, saveToken, getToken } from '../../lib/api';
 import { AntDesign, Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
@@ -45,52 +46,156 @@ export default function LoginScreen() {
         setErrorTitle(title);
         setErrorMessage(message);
         // Di iOS, modal baru tidak bisa muncul saat modal loading masih menutup
-        setTimeout(() => setErrorModalVisible(true), Platform.OS === 'ios' ? 400 : 0);
+        setTimeout(
+            () => setErrorModalVisible(true),
+            Platform.OS === 'ios' ? 400 : 0
+        );
     };
 
-
     const handleSignIn = async () => {
+        console.log('═══════════════════════════════════════════');
+        console.log('🔐 [LOGIN] START');
+        console.log('═══════════════════════════════════════════');
+
         // Validasi dasar
         if (!email.trim() || !password.trim()) {
-            showErrorModal('Data belum lengkap', 'Email dan kata sandi wajib diisi.');
+            console.log('⚠️ [LOGIN] Validasi gagal: email/password kosong');
+            showErrorModal(
+                'Data belum lengkap',
+                'Email dan kata sandi wajib diisi.'
+            );
             return;
         }
 
         setLoading(true);
-        console.log('[LOGIN] Mulai proses login untuk:', email.trim().toLowerCase());
 
         try {
-            // 1. Login ke backend
+            // ============================================================
+            // 1. LOGIN ke backend
+            // ============================================================
+            console.log(
+                '🟡 [LOGIN] Step 1: POST /api/auth/login untuk:',
+                email.trim().toLowerCase()
+            );
+
             const res = await api.login({
                 email: email.trim().toLowerCase(),
                 password,
             });
-            console.log('[LOGIN] Response berhasil:', {
+
+            console.log('🟢 [LOGIN] Step 1 OK — Response:', {
                 userId: res.userId,
                 role: res.role,
                 tokenLength: res.token?.length,
+                tokenPreview: res.token
+                    ? res.token.substring(0, 30) + '...'
+                    : 'KOSONG',
             });
 
-            // 2. Simpan JWT token
+            // ============================================================
+            // 2. SIMPAN TOKEN
+            // ============================================================
+            console.log('🟡 [LOGIN] Step 2: saveToken()...');
+
+            if (!res.token) {
+                console.error('🔴 [LOGIN] Token KOSONG dari backend!');
+                throw new Error('Token tidak diterima dari server');
+            }
+
             await saveToken(res.token);
 
-            // 3. Ambil profil lengkap dari backend
+            console.log('🟢 [LOGIN] Step 2 OK — saveToken() selesai');
+
+            // ============================================================
+            // ✅ 2b. VERIFIKASI: cek apakah token benar-benar tersimpan
+            // ============================================================
+            const storedToken = await getToken();
+            console.log('🟢 [LOGIN] Step 2b — Verifikasi token tersimpan:', {
+                exists: !!storedToken,
+                length: storedToken?.length ?? 0,
+                match: storedToken === res.token,
+                preview: storedToken
+                    ? storedToken.substring(0, 30) + '...'
+                    : 'KOSONG',
+            });
+
+            if (!storedToken) {
+                console.error(
+                    '🔴 [LOGIN] Token TIDAK TERSIMPAN setelah saveToken()!'
+                );
+                throw new Error(
+                    'Token gagal disimpan di perangkat. Coba lagi.'
+                );
+            }
+
+            if (storedToken !== res.token) {
+                console.warn(
+                    '⚠️ [LOGIN] Token tersimpan berbeda dari yang diterima!'
+                );
+            }
+
+            // Cek langsung di storage (web: localStorage, native: SecureStore)
+            if (Platform.OS === 'web') {
+                const lsToken =
+                    typeof window !== 'undefined'
+                        ? window.localStorage.getItem('auth_token')
+                        : null;
+                console.log('🟢 [LOGIN] Step 2c — localStorage auth_token:', {
+                    exists: !!lsToken,
+                    length: lsToken?.length ?? 0,
+                });
+            }
+
+            // ============================================================
+            // 3. AMBIL PROFIL
+            // ============================================================
+            console.log('🟡 [LOGIN] Step 3: api.me()...');
+
             const profile = await api.me();
-            console.log('[LOGIN] Profil diterima:', {
+
+            console.log('🟢 [LOGIN] Step 3 OK — Profil diterima:', {
                 id: profile.id,
                 email: profile.email,
                 full_name: profile.full_name,
                 role: profile.role,
             });
 
-            // 4. Simpan profil ke AsyncStorage (cache)
+            // ============================================================
+            // 4. SIMPAN PROFIL ke AsyncStorage
+            // ============================================================
+            console.log('🟡 [LOGIN] Step 4: simpan profil ke AsyncStorage...');
+
             await AsyncStorage.setItem('profile', JSON.stringify(profile));
 
-            // 5. Masuk ke tab utama
-            console.log('[LOGIN] Login sukses');
+            console.log('🟢 [LOGIN] Step 4 OK — Profil tersimpan');
+
+            // Verifikasi profil tersimpan
+            const cachedProfile = await AsyncStorage.getItem('profile');
+            console.log('🟢 [LOGIN] Step 4b — Verifikasi profil:', {
+                exists: !!cachedProfile,
+                length: cachedProfile?.length ?? 0,
+            });
+
+            // ============================================================
+            // 5. REDIRECT ke tabs
+            // ============================================================
+            console.log('🟡 [LOGIN] Step 5: redirect ke /(tabs)');
+
             router.replace('/(tabs)' as any);
+
+            console.log('🟢 [LOGIN] Step 5 OK — Redirect dipanggil');
+            console.log('═══════════════════════════════════════════');
+            console.log('✅ [LOGIN] SUKSES TOTAL');
+            console.log('═══════════════════════════════════════════');
         } catch (err: any) {
-            console.error('[LOGIN] Gagal:', err.message);
+            console.error('═══════════════════════════════════════════');
+            console.error('🔴 [LOGIN] GAGAL');
+            console.error('═══════════════════════════════════════════');
+            console.error('[LOGIN] Error name:', err?.name);
+            console.error('[LOGIN] Error message:', err?.message);
+            console.error('[LOGIN] Error stack:', err?.stack);
+            console.error('═══════════════════════════════════════════');
+
             showErrorModal(
                 'Login Gagal',
                 err.message || 'Periksa email dan kata sandi Anda.'
@@ -101,7 +206,7 @@ export default function LoginScreen() {
     };
 
     const handleGoogleSignIn = () => {
-        console.log('Sign in dengan Google');
+        console.log('[LOGIN] Sign in dengan Google — belum tersedia');
         showErrorModal('Segera Hadir', 'Masuk dengan Google belum tersedia.');
     };
 
@@ -154,9 +259,15 @@ export default function LoginScreen() {
                                 editable={!loading}
                                 onSubmitEditing={handleSignIn}
                             />
-                            <TouchableOpacity onPress={() => setShowPassword((v) => !v)}>
+                            <TouchableOpacity
+                                onPress={() => setShowPassword((v) => !v)}
+                            >
                                 <Ionicons
-                                    name={showPassword ? 'eye-outline' : 'eye-off-outline'}
+                                    name={
+                                        showPassword
+                                            ? 'eye-outline'
+                                            : 'eye-off-outline'
+                                    }
                                     size={20}
                                     color={COLORS.textMuted}
                                 />
@@ -173,7 +284,10 @@ export default function LoginScreen() {
 
                     {/* Tombol Masuk */}
                     <TouchableOpacity
-                        style={[styles.primaryButton, loading && { opacity: 0.6 }]}
+                        style={[
+                            styles.primaryButton,
+                            loading && { opacity: 0.6 },
+                        ]}
                         activeOpacity={0.85}
                         onPress={handleSignIn}
                         disabled={loading}
@@ -184,7 +298,9 @@ export default function LoginScreen() {
                     {/* Divider */}
                     <View style={styles.dividerRow}>
                         <View style={styles.dividerLine} />
-                        <Text style={styles.dividerText}>Atau masuk dengan</Text>
+                        <Text style={styles.dividerText}>
+                            Atau masuk dengan
+                        </Text>
                         <View style={styles.dividerLine} />
                     </View>
 
@@ -195,14 +311,26 @@ export default function LoginScreen() {
                         onPress={handleGoogleSignIn}
                         disabled={loading}
                     >
-                        <AntDesign name="google" size={20} color="#EA4335" />
-                        <Text style={styles.googleButtonText}>Masuk dengan Google</Text>
+                        <AntDesign
+                            name="google"
+                            size={20}
+                            color="#EA4335"
+                        />
+                        <Text style={styles.googleButtonText}>
+                            Masuk dengan Google
+                        </Text>
                     </TouchableOpacity>
 
                     {/* Footer */}
                     <View style={styles.footer}>
-                        <Text style={styles.footerText}>Belum punya akun? </Text>
-                        <TouchableOpacity onPress={() => router.push('/(auth)/register' as any)}>
+                        <Text style={styles.footerText}>
+                            Belum punya akun?{' '}
+                        </Text>
+                        <TouchableOpacity
+                            onPress={() =>
+                                router.push('/(auth)/register' as any)
+                            }
+                        >
                             <Text style={styles.footerLink}>Daftar</Text>
                         </TouchableOpacity>
                     </View>
@@ -218,7 +346,10 @@ export default function LoginScreen() {
             >
                 <View style={styles.loadingOverlay}>
                     <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color={COLORS.primary} />
+                        <ActivityIndicator
+                            size="large"
+                            color={COLORS.primary}
+                        />
                     </View>
                 </View>
             </Modal>
@@ -232,7 +363,9 @@ export default function LoginScreen() {
                 onRequestClose={() => setErrorModalVisible(false)}
             >
                 <View style={styles.sheetOverlay}>
-                    <TouchableWithoutFeedback onPress={() => setErrorModalVisible(false)}>
+                    <TouchableWithoutFeedback
+                        onPress={() => setErrorModalVisible(false)}
+                    >
                         <View style={{ flex: 1 }} />
                     </TouchableWithoutFeedback>
 
@@ -245,7 +378,9 @@ export default function LoginScreen() {
                         </TouchableOpacity>
 
                         <Text style={styles.sheetTitle}>{errorTitle}</Text>
-                        <Text style={styles.sheetDescription}>{errorMessage}</Text>
+                        <Text style={styles.sheetDescription}>
+                            {errorMessage}
+                        </Text>
 
                         <TouchableOpacity
                             onPress={() => setErrorModalVisible(false)}
@@ -262,12 +397,26 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.bg },
-    scrollContent: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 40 },
+    scrollContent: {
+        paddingHorizontal: 24,
+        paddingTop: 24,
+        paddingBottom: 40,
+    },
     header: { marginBottom: 28 },
-    title: { fontSize: 26, fontWeight: '700', color: COLORS.textDark, marginBottom: 6 },
+    title: {
+        fontSize: 26,
+        fontWeight: '700',
+        color: COLORS.textDark,
+        marginBottom: 6,
+    },
     subtitle: { fontSize: 14, color: COLORS.textMuted },
     field: { marginBottom: 18 },
-    label: { fontSize: 13, fontWeight: '600', color: COLORS.textDark, marginBottom: 8 },
+    label: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: COLORS.textDark,
+        marginBottom: 8,
+    },
     input: {
         backgroundColor: COLORS.card,
         borderWidth: 1,
@@ -288,9 +437,18 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         paddingHorizontal: 14,
     },
-    passwordInput: { flex: 1, paddingVertical: 12, fontSize: 14, color: COLORS.textDark },
+    passwordInput: {
+        flex: 1,
+        paddingVertical: 12,
+        fontSize: 14,
+        color: COLORS.textDark,
+    },
     forgotWrapper: { alignSelf: 'flex-end', marginBottom: 24 },
-    forgotText: { fontSize: 13, fontWeight: '600', color: COLORS.primary },
+    forgotText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: COLORS.primary,
+    },
     primaryButton: {
         backgroundColor: COLORS.primary,
         borderRadius: 30,
@@ -303,10 +461,22 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 4 },
         elevation: 3,
     },
-    primaryButtonText: { color: '#ffffff', fontSize: 16, fontWeight: '700' },
-    dividerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 24 },
+    primaryButtonText: {
+        color: '#ffffff',
+        fontSize: 16,
+        fontWeight: '700',
+    },
+    dividerRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 24,
+    },
     dividerLine: { flex: 1, height: 1, backgroundColor: COLORS.border },
-    dividerText: { marginHorizontal: 12, fontSize: 12, color: COLORS.textMuted },
+    dividerText: {
+        marginHorizontal: 12,
+        fontSize: 12,
+        color: COLORS.textMuted,
+    },
     googleButton: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -318,10 +488,19 @@ const styles = StyleSheet.create({
         marginBottom: 28,
         backgroundColor: COLORS.bg,
     },
-    googleButtonText: { marginLeft: 10, fontSize: 14, fontWeight: '600', color: COLORS.textDark },
+    googleButtonText: {
+        marginLeft: 10,
+        fontSize: 14,
+        fontWeight: '600',
+        color: COLORS.textDark,
+    },
     footer: { flexDirection: 'row', justifyContent: 'center', marginBottom: 8 },
     footerText: { fontSize: 13, color: COLORS.textMuted },
-    footerLink: { fontSize: 13, fontWeight: '700', color: COLORS.secondary },
+    footerLink: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: COLORS.secondary,
+    },
 
     // ── Style Loading Modal ──
     loadingOverlay: {

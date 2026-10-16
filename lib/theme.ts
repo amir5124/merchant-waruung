@@ -2,7 +2,7 @@
 // Warna yang dipakai desain UI merchant Waruung.
 // primary dibuat lebih gelap dari #40a3ea supaya teks putih di atas tombol terbaca jelas.
 export const COLORS = {
-    primary: '#1b76b8',
+    primary: '#40a3ea',
     primaryTint: '#eaf5fd',
     accentText: '#a85a05',
     ink: '#14222e',

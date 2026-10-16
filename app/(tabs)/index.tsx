@@ -12,16 +12,22 @@ import {
     View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { AlertSheet, useAlertSheet } from '../../components/FeedbackModals';
+import {
+    AlertButton,
+    AlertSheet,
+    LoadingModal,
+} from '../../components/FeedbackModals';
 import OrderCard from '../../components/OrderCard';
 import ToggleSwitch from '../../components/ToggleSwitch';
 import { useOrders } from '../../hooks/useOrders';
 import { api, MerchantStore } from '../../lib/api';
-import { confirmAction } from '../../lib/dialogs';
 import { greeting, rupiah } from '../../lib/format';
 import { getOpenStatus } from '../../lib/openHours';
 import { COLORS } from '../../lib/theme';
 
+// ============================================================
+// STAT CARD
+// ============================================================
 function StatCard({
     icon,
     iconColor,
@@ -38,7 +44,10 @@ function StatCard({
     return (
         <View style={styles.statCard}>
             <Ionicons name={icon} size={22} color={iconColor} />
-            <Text style={[styles.statValue, small && { fontSize: 20 }]} numberOfLines={1}>
+            <Text
+                style={[styles.statValue, small && { fontSize: 20 }]}
+                numberOfLines={1}
+            >
                 {value}
             </Text>
             <Text style={styles.statLabel}>{label}</Text>
@@ -46,24 +55,48 @@ function StatCard({
     );
 }
 
+// ============================================================
+// SCREEN
+// ============================================================
 export default function BerandaScreen() {
     const [store, setStore] = useState<MerchantStore | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [refreshing, setRefreshing] = useState(false);
-    const [toggling, setToggling] = useState(false);
-    // Dipakai untuk menghitung ulang status jam operasional
     const [now, setNow] = useState(() => new Date());
 
     const orders = useOrders();
-    const alert = useAlertSheet();
 
+    // ============================================================
+    // STATE: AlertSheet + LoadingModal
+    // ============================================================
+    const [alertState, setAlertState] = useState<{
+        visible: boolean;
+        title: string;
+        message: string;
+        buttons?: AlertButton[];
+    }>({ visible: false, title: '', message: '' });
+
+    const showAlert = (
+        title: string,
+        message: string,
+        buttons?: AlertButton[]
+    ) => setAlertState({ visible: true, title, message, buttons });
+
+    const closeAlert = () =>
+        setAlertState((p) => ({ ...p, visible: false }));
+
+    // ✅ Loading state global (toggle, accept, reject dari parent)
+    const [busyAction, setBusyAction] = useState<string | null>(null);
+
+    // ============================================================
+    // LOAD STORE
+    // ============================================================
     const loadStore = useCallback(async () => {
         try {
             setError(null);
             const s = await api.merchant.getMyStore();
             if (!s) {
-                // Belum punya toko → lengkapi dulu
                 router.replace('/lengkapi-toko' as any);
                 return;
             }
@@ -79,7 +112,6 @@ export default function BerandaScreen() {
         useCallback(() => {
             loadStore();
             setNow(new Date());
-            // Perbarui status jam operasional tiap menit selama layar aktif
             const timer = setInterval(() => setNow(new Date()), 60 * 1000);
             return () => clearInterval(timer);
         }, [loadStore])
@@ -92,44 +124,34 @@ export default function BerandaScreen() {
         setRefreshing(false);
     };
 
+    // ============================================================
+    // TOGGLE OPEN — pakai LoadingModal
+    // ============================================================
     const toggleOpen = async (value: boolean) => {
-        setToggling(true);
+        setBusyAction('toggle');
         try {
-            setStore(await api.merchant.setOpen(value));
+            const updated = await api.merchant.setOpen(value);
+            setStore(updated);
         } catch (e: any) {
-            alert.show('Gagal mengubah status', e?.message ?? 'Coba lagi.');
+            showAlert(
+                'Gagal mengubah status',
+                e?.message ?? 'Coba lagi.',
+                [{ text: 'OK', style: 'default' }]
+            );
         } finally {
-            setToggling(false);
+            setBusyAction(null);
         }
     };
 
-    const handleAccept = async (id: number) => {
-        try {
-            await orders.accept(id);
-        } catch (e: any) {
-            alert.show('Gagal menerima pesanan', e?.message ?? 'Coba lagi.');
-        }
-    };
-
-    const handleReject = async (id: number, code: string) => {
-        const ok = await confirmAction({
-            title: 'Tolak pesanan',
-            message: `Yakin menolak pesanan #${code}?`,
-            confirmText: 'Tolak',
-            destructive: true,
-        });
-        if (!ok) return;
-        try {
-            await orders.reject(id);
-        } catch (e: any) {
-            alert.show('Gagal menolak pesanan', e?.message ?? 'Coba lagi.');
-        }
-    };
-
-    // ── Loading / error ──
+    // ============================================================
+    // LOADING / ERROR STATE
+    // ============================================================
     if (loading) {
         return (
-            <SafeAreaView edges={['top']} style={[styles.container, styles.center]}>
+            <SafeAreaView
+                edges={['top']}
+                style={[styles.container, styles.center]}
+            >
                 <ActivityIndicator size="large" color={COLORS.primary} />
             </SafeAreaView>
         );
@@ -137,8 +159,15 @@ export default function BerandaScreen() {
 
     if (error && !store) {
         return (
-            <SafeAreaView edges={['top']} style={[styles.container, styles.center]}>
-                <Ionicons name="cloud-offline-outline" size={44} color={COLORS.muted} />
+            <SafeAreaView
+                edges={['top']}
+                style={[styles.container, styles.center]}
+            >
+                <Ionicons
+                    name="cloud-offline-outline"
+                    size={44}
+                    color={COLORS.muted}
+                />
                 <Text style={styles.errorText}>{error}</Text>
                 <TouchableOpacity
                     style={styles.retryBtn}
@@ -157,17 +186,16 @@ export default function BerandaScreen() {
 
     const isOpen = store.is_open;
     const rating =
-        store.rating_avg != null ? Number(store.rating_avg).toFixed(1).replace('.', ',') : '-';
+        store.rating_avg != null
+            ? Number(store.rating_avg).toFixed(1).replace('.', ',')
+            : '-';
     const hasLocation = store.latitude != null && store.longitude != null;
 
-    // ── Status jam operasional ──
     const { hasSchedule, withinHours, todayLabel } = getOpenStatus(
         (store as any).open_hours,
         now
     );
-    // Saklar nyala tapi sedang di luar jam operasional
     const outsideHours = isOpen && hasSchedule && !withinHours;
-    // Toko dianggap tutup kalau saklar mati ATAU di luar jam operasional
     const effectivelyClosed = !isOpen || outsideHours;
 
     const hoursText = todayLabel
@@ -179,31 +207,49 @@ export default function BerandaScreen() {
             <ScrollView
                 contentContainerStyle={styles.scroll}
                 showsVerticalScrollIndicator={false}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                    />
+                }
             >
                 {/* ── Header ── */}
                 <View style={styles.header}>
                     <View style={{ flex: 1 }}>
                         <Text style={styles.greet}>{greeting()}</Text>
                         <View style={styles.nameRow}>
-                            <Text style={styles.storeName} numberOfLines={1}>
+                            <Text
+                                style={styles.storeName}
+                                numberOfLines={1}
+                            >
                                 {store.store_name}
                             </Text>
                             {effectivelyClosed && (
                                 <View style={styles.closedBadge}>
                                     <View style={styles.closedDot} />
-                                    <Text style={styles.closedBadgeText}>Tutup</Text>
+                                    <Text style={styles.closedBadgeText}>
+                                        Tutup
+                                    </Text>
                                 </View>
                             )}
                         </View>
                     </View>
                     <TouchableOpacity
                         style={styles.bell}
-                        onPress={() => router.push('/(tabs)/pesanan' as any)}
+                        onPress={() =>
+                            router.push('/(tabs)/pesanan' as any)
+                        }
                         accessibilityLabel="Lihat pesanan"
                     >
-                        <Ionicons name="notifications-outline" size={20} color={COLORS.ink} />
-                        {orders.baru.length > 0 && <View style={styles.bellDot} />}
+                        <Ionicons
+                            name="notifications-outline"
+                            size={20}
+                            color={COLORS.ink}
+                        />
+                        {orders.baru.length > 0 && (
+                            <View style={styles.bellDot} />
+                        )}
                     </TouchableOpacity>
                 </View>
 
@@ -211,7 +257,11 @@ export default function BerandaScreen() {
                 <View
                     style={[
                         styles.statusCard,
-                        { backgroundColor: effectivelyClosed ? '#3d4b58' : COLORS.primary },
+                        {
+                            backgroundColor: effectivelyClosed
+                                ? '#3d4b58'
+                                : COLORS.primary,
+                        },
                     ]}
                 >
                     <View style={{ flex: 1, gap: 4 }}>
@@ -224,28 +274,36 @@ export default function BerandaScreen() {
                                     : 'Buka, menerima pesanan'}
                         </Text>
                         {hasSchedule && (
-                            <Text style={styles.statusHours}>{hoursText}</Text>
+                            <Text style={styles.statusHours}>
+                                {hoursText}
+                            </Text>
                         )}
                     </View>
-                    {toggling ? (
-                        <ActivityIndicator color="#ffffff" />
-                    ) : (
-                        <ToggleSwitch
-                            variant="onPrimary"
-                            value={isOpen}
-                            onValueChange={toggleOpen}
-                            label={isOpen ? 'Status toko buka' : 'Status toko tutup'}
-                        />
-                    )}
+                    <ToggleSwitch
+                        variant="onPrimary"
+                        value={isOpen}
+                        onValueChange={toggleOpen}
+                        label={
+                            isOpen
+                                ? 'Status toko buka'
+                                : 'Status toko tutup'
+                        }
+                    />
                 </View>
 
-                {/* ── Peringatan di luar jam operasional ── */}
+                {/* ── Warning jam operasional ── */}
                 {outsideHours && (
                     <View style={styles.warnCard}>
-                        <Ionicons name="time-outline" size={20} color={COLORS.warnText} />
+                        <Ionicons
+                            name="time-outline"
+                            size={20}
+                            color={COLORS.warnText}
+                        />
                         <Text style={styles.warnText}>
-                            Saklar toko masih menyala, tapi saat ini di luar jam operasional.
-                            Atur jadwal atau matikan saklar kalau tidak ingin menerima pesanan.
+                            Saklar toko masih menyala, tapi saat ini di
+                            luar jam operasional. Atur jadwal atau
+                            matikan saklar kalau tidak ingin menerima
+                            pesanan.
                         </Text>
                     </View>
                 )}
@@ -267,7 +325,12 @@ export default function BerandaScreen() {
                     />
                 </View>
                 <View style={styles.statsRow}>
-                    <StatCard icon="star" iconColor="#e68515" value={rating} label="Rating toko" />
+                    <StatCard
+                        icon="star"
+                        iconColor="#e68515"
+                        value={rating}
+                        label="Rating toko"
+                    />
                     <StatCard
                         icon="time-outline"
                         iconColor="#e68515"
@@ -276,29 +339,41 @@ export default function BerandaScreen() {
                     />
                 </View>
 
-                {/* ── Lokasi belum diatur ── */}
+                {/* ── Lokasi warning ── */}
                 {!hasLocation && (
                     <TouchableOpacity
                         style={styles.warnCard}
                         activeOpacity={0.8}
-                        onPress={() => router.push('/lengkapi-toko' as any)}
+                        onPress={() =>
+                            router.push('/lengkapi-toko' as any)
+                        }
                     >
-                        <Ionicons name="location-outline" size={20} color={COLORS.warnText} />
+                        <Ionicons
+                            name="location-outline"
+                            size={20}
+                            color={COLORS.warnText}
+                        />
                         <Text style={styles.warnText}>
-                            Lokasi toko belum diatur, tokomu belum muncul di pencarian terdekat. Ketuk
-                            untuk mengatur.
+                            Lokasi toko belum diatur, tokomu belum muncul
+                            di pencarian terdekat. Ketuk untuk mengatur.
                         </Text>
                     </TouchableOpacity>
                 )}
 
                 {/* ── Pesanan masuk ── */}
                 <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>Pesanan masuk</Text>
+                    <Text style={styles.sectionTitle}>
+                        Pesanan masuk
+                    </Text>
                     <TouchableOpacity
                         style={styles.sectionLink}
-                        onPress={() => router.push('/(tabs)/pesanan' as any)}
+                        onPress={() =>
+                            router.push('/(tabs)/pesanan' as any)
+                        }
                     >
-                        <Text style={styles.sectionLinkText}>Lihat semua</Text>
+                        <Text style={styles.sectionLinkText}>
+                            Lihat semua
+                        </Text>
                     </TouchableOpacity>
                 </View>
 
@@ -310,8 +385,14 @@ export default function BerandaScreen() {
                     </View>
                 ) : orders.baru.length === 0 ? (
                     <View style={styles.emptyCard}>
-                        <Ionicons name="checkmark-circle-outline" size={28} color={COLORS.muted} />
-                        <Text style={styles.emptyText}>Belum ada pesanan baru.</Text>
+                        <Ionicons
+                            name="checkmark-circle-outline"
+                            size={28}
+                            color={COLORS.muted}
+                        />
+                        <Text style={styles.emptyText}>
+                            Belum ada pesanan baru.
+                        </Text>
                     </View>
                 ) : (
                     <View style={{ gap: 12 }}>
@@ -320,28 +401,48 @@ export default function BerandaScreen() {
                                 key={o.id}
                                 order={o}
                                 variant="compact"
-                                busy={orders.busyId === o.id}
-                                onAccept={() => handleAccept(o.id)}
-                                onReject={() => handleReject(o.id, o.order_code)}
+                                // ✅ OrderCard handle loading & alert sendiri
+                                onAccept={async () => {
+                                    await orders.accept(o.id);
+                                }}
+                                onReject={async () => {
+                                    await orders.reject(o.id);
+                                }}
                             />
                         ))}
                     </View>
                 )}
             </ScrollView>
 
+            {/* ============================================================
+                LOADING MODAL — untuk toggle dari parent
+               ============================================================ */}
+            <LoadingModal visible={!!busyAction} />
+
+            {/* ============================================================
+                ALERT SHEET — untuk alert dari parent
+               ============================================================ */}
             <AlertSheet
-                visible={alert.state.visible}
-                title={alert.state.title}
-                message={alert.state.message}
-                onClose={alert.hide}
+                visible={alertState.visible}
+                title={alertState.title}
+                message={alertState.message}
+                buttons={alertState.buttons}
+                onClose={closeAlert}
             />
         </SafeAreaView>
     );
 }
 
+// ============================================================
+// STYLES
+// ============================================================
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.surface },
-    center: { alignItems: 'center', justifyContent: 'center', padding: 24 },
+    center: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+    },
     scroll: { padding: 24, paddingBottom: 32 },
 
     header: { flexDirection: 'row', alignItems: 'center', gap: 12 },
@@ -363,8 +464,17 @@ const styles = StyleSheet.create({
         borderRadius: 999,
         backgroundColor: '#fdecea',
     },
-    closedDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#d92d20' },
-    closedBadgeText: { fontSize: 12, fontWeight: '700', color: '#b42318' },
+    closedDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: '#d92d20',
+    },
+    closedBadgeText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#b42318',
+    },
     bell: {
         width: 44,
         height: 44,
@@ -396,9 +506,19 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
         borderRadius: 20,
     },
-    statusLabel: { fontSize: 13, color: 'rgba(255,255,255,0.9)' },
-    statusText: { fontSize: 17, fontWeight: '800', color: '#ffffff' },
-    statusHours: { fontSize: 12, color: 'rgba(255,255,255,0.8)' },
+    statusLabel: {
+        fontSize: 13,
+        color: 'rgba(255,255,255,0.9)',
+    },
+    statusText: {
+        fontSize: 17,
+        fontWeight: '800',
+        color: '#ffffff',
+    },
+    statusHours: {
+        fontSize: 12,
+        color: 'rgba(255,255,255,0.8)',
+    },
 
     statsRow: { marginTop: 12, flexDirection: 'row', gap: 12 },
     statCard: {
@@ -410,7 +530,12 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: COLORS.line,
     },
-    statValue: { marginTop: 6, fontSize: 24, fontWeight: '800', color: COLORS.ink },
+    statValue: {
+        marginTop: 6,
+        fontSize: 24,
+        fontWeight: '800',
+        color: COLORS.ink,
+    },
     statLabel: { fontSize: 12, color: COLORS.muted },
 
     warnCard: {
@@ -422,7 +547,12 @@ const styles = StyleSheet.create({
         borderRadius: 14,
         backgroundColor: COLORS.warnBg,
     },
-    warnText: { flex: 1, fontSize: 13, lineHeight: 19, color: COLORS.warnText },
+    warnText: {
+        flex: 1,
+        fontSize: 13,
+        lineHeight: 19,
+        color: COLORS.warnText,
+    },
 
     sectionHeader: {
         marginTop: 22,
@@ -432,7 +562,11 @@ const styles = StyleSheet.create({
     },
     sectionTitle: { fontSize: 17, fontWeight: '800', color: COLORS.ink },
     sectionLink: { minHeight: 44, justifyContent: 'center' },
-    sectionLinkText: { fontSize: 14, fontWeight: '700', color: COLORS.primary },
+    sectionLinkText: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: COLORS.primary,
+    },
 
     emptyCard: {
         alignItems: 'center',
@@ -443,9 +577,19 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: COLORS.line,
     },
-    emptyText: { fontSize: 14, color: COLORS.muted, textAlign: 'center', lineHeight: 20 },
+    emptyText: {
+        fontSize: 14,
+        color: COLORS.muted,
+        textAlign: 'center',
+        lineHeight: 20,
+    },
 
-    errorText: { marginVertical: 12, fontSize: 14, color: COLORS.muted, textAlign: 'center' },
+    errorText: {
+        marginVertical: 12,
+        fontSize: 14,
+        color: COLORS.muted,
+        textAlign: 'center',
+    },
     retryBtn: {
         height: 48,
         paddingHorizontal: 28,

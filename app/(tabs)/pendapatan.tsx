@@ -12,7 +12,8 @@ import {
     View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { AlertSheet, useAlertSheet } from '../../components/FeedbackModals';
+import AppAlert, { AlertButton } from '../../components/AppAlert';
+import DebtBanner from '../../components/DebtBanner';
 import { useOrders } from '../../hooks/useOrders';
 import { api } from '../../lib/api';
 import { rupiah } from '../../lib/format';
@@ -32,7 +33,6 @@ const PAGE_SIZE = 30;
 const num = (v: any) => Number(v) || 0;
 
 // ── Pendapatan dari pesanan ──
-// Status order yang dianggap sudah selesai (huruf kecil)
 const COMPLETED_STATUSES = new Set(['completed', 'selesai', 'done', 'delivered']);
 
 type PayMethod = 'cash' | 'online' | null;
@@ -98,6 +98,8 @@ type MerchantWalletResponse = {
 
 async function fetchWallet(): Promise<Wallet> {
     const w = (await api.wallet.get()) as unknown as MerchantWalletResponse;
+    // TEMPORARY: hapus setelah banner utang tampil
+    console.log('[PENDAPATAN] wallet response:', JSON.stringify(w));
     return {
         balance: num(w?.balance),
         pending: num(w?.pending_payout),
@@ -246,7 +248,6 @@ const STATUS_META: Record<TxStatus, { label: string; bg: string; fg: string }> =
 // ============================================================
 export default function PendapatanScreen() {
     const orders = useOrders();
-    const alert = useAlertSheet();
     const scrollRef = useRef<ScrollView>(null);
     const riwayatY = useRef(0);
 
@@ -261,6 +262,24 @@ export default function PendapatanScreen() {
     const [filterPeriod, setFilterPeriod] = useState<Period | null>(null);
     const [historyTab, setHistoryTab] = useState<HistoryTab>('pendapatan');
 
+    // ============================================================
+    // ALERT (AppAlert)
+    // ============================================================
+    const [alertState, setAlertState] = useState<{
+        visible: boolean;
+        title: string;
+        message: string;
+        buttons?: AlertButton[];
+    }>({ visible: false, title: '', message: '' });
+
+    const showAlert = (title: string, message: string, buttons?: AlertButton[]) =>
+        setAlertState({ visible: true, title, message, buttons });
+
+    const closeAlert = () => setAlertState((p) => ({ ...p, visible: false }));
+
+    // ============================================================
+    // LOAD
+    // ============================================================
     const loadWallet = useCallback(async () => {
         const [w, t] = await Promise.allSettled([fetchWallet(), fetchWalletTx(PAGE_SIZE, 0)]);
 
@@ -344,6 +363,20 @@ export default function PendapatanScreen() {
 
     const txSections = useMemo(() => groupByDay(txs ?? []), [txs]);
 
+    // Rincian komisi untuk bottom sheet utang
+    const debtEntries = useMemo(
+        () =>
+            (txs ?? [])
+                .filter((t) => t.kind === 'commission')
+                .map((t) => ({
+                    id: t.id,
+                    note: t.note,
+                    amount: Math.abs(t.amount),
+                    at: t.at,
+                })),
+        [txs]
+    );
+
     // ── Handlers ──
     const scrollToRiwayat = () =>
         scrollRef.current?.scrollTo({ y: Math.max(riwayatY.current - 12, 0), animated: true });
@@ -355,26 +388,16 @@ export default function PendapatanScreen() {
     };
 
     const showInfo = () =>
-        alert.show(
+        showAlert(
             period === 'day' ? 'Pendapatan hari ini' : 'Pendapatan minggu ini',
             'Total yang diterima tokomu dari pesanan makanan yang sudah selesai pada periode ini, setelah dipotong komisi platform. ' +
             'Pesanan tunai: uang sudah kamu terima langsung, komisinya dipotong dari saldo toko atau dicatat sebagai utang. ' +
             'Pesanan online: pendapatan bersih masuk ke saldo toko.'
         );
 
-    const showDebtInfo = () =>
-        alert.show(
-            'Utang komisi',
-            'Untuk pesanan tunai, uang diterima langsung oleh tokomu sehingga komisi platform ditagih dari saldo toko. ' +
-            'Kalau saldo tidak cukup, komisi dicatat sebagai utang dan dilunasi otomatis dari top up atau pendapatan online berikutnya. ' +
-            (wallet && wallet.debtLimit > 0
-                ? `Jika utang mencapai ${rupiah(wallet.debtLimit)}, toko tidak bisa menerima pesanan tunai baru sampai dilunasi.`
-                : '')
-        );
-
     const handleTopUp = () => {
         if (!wallet) {
-            alert.show('Segera Hadir', 'Top up saldo toko belum tersedia.');
+            showAlert('Segera Hadir', 'Top up saldo toko belum tersedia.');
             return;
         }
         router.push('/topup' as any);
@@ -382,18 +405,18 @@ export default function PendapatanScreen() {
 
     const handleWithdraw = () => {
         if (!wallet) {
-            alert.show('Segera Hadir', 'Penarikan saldo toko belum tersedia.');
+            showAlert('Segera Hadir', 'Penarikan saldo toko belum tersedia.');
             return;
         }
         if (wallet.cashDebt > 0) {
-            alert.show(
+            showAlert(
                 'Ada Utang Komisi',
                 `Lunasi utang komisi ${rupiah(wallet.cashDebt)} lebih dulu lewat top up sebelum menarik saldo.`
             );
             return;
         }
         if (wallet.balance <= 0) {
-            alert.show('Saldo Kosong', 'Belum ada saldo toko yang bisa ditarik.');
+            showAlert('Saldo Kosong', 'Belum ada saldo toko yang bisa ditarik.');
             return;
         }
         router.push('/tarik' as any);
@@ -606,25 +629,14 @@ export default function PendapatanScreen() {
                         </Text>
                     )}
 
-                    {!!wallet && wallet.cashDebt > 0 && (
-                        <Pressable style={s.debtBanner} onPress={showDebtInfo}>
-                            <Ionicons
-                                name="alert-circle"
-                                size={18}
-                                color={DANGER}
-                                style={{ marginTop: 1 }}
-                            />
-                            <View style={{ flex: 1 }}>
-                                <Text style={s.debtTitle}>
-                                    Utang komisi {rupiah(wallet.cashDebt)}
-                                </Text>
-                                <Text style={s.debtDesc}>
-                                    {wallet.canAcceptCash
-                                        ? 'Top up saldo untuk melunasi. Penarikan saldo ditahan sampai lunas.'
-                                        : 'Pesanan tunai dihentikan sementara. Top up untuk melunasi utang dan menerima pesanan tunai lagi.'}
-                                </Text>
-                            </View>
-                        </Pressable>
+                    {!!wallet && (
+                        <DebtBanner
+                            debt={wallet.cashDebt}
+                            limit={wallet.debtLimit}
+                            canAcceptCash={wallet.canAcceptCash}
+                            entries={debtEntries}
+                            onTopUp={handleTopUp}
+                        />
                     )}
                 </View>
 
@@ -752,11 +764,12 @@ export default function PendapatanScreen() {
                 </View>
             </ScrollView>
 
-            <AlertSheet
-                visible={alert.state.visible}
-                title={alert.state.title}
-                message={alert.state.message}
-                onClose={alert.hide}
+            <AppAlert
+                visible={alertState.visible}
+                title={alertState.title}
+                message={alertState.message}
+                buttons={alertState.buttons}
+                onClose={closeAlert}
             />
         </SafeAreaView>
     );
@@ -848,18 +861,6 @@ const s = StyleSheet.create({
     },
     walletValue: { fontSize: 17, fontWeight: '800', color: COLORS.ink },
     walletNote: { marginTop: 12, textAlign: 'center', fontSize: 12, color: COLORS.muted },
-
-    // Banner utang komisi
-    debtBanner: {
-        flexDirection: 'row',
-        gap: 10,
-        marginTop: 16,
-        padding: 12,
-        borderRadius: 14,
-        backgroundColor: DANGER_SOFT,
-    },
-    debtTitle: { fontSize: 14, fontWeight: '800', color: DANGER },
-    debtDesc: { marginTop: 2, fontSize: 12, lineHeight: 18, color: DANGER },
 
     // Card Top up & Tarik
     actionCards: { marginTop: 12, flexDirection: 'row', gap: 12 },

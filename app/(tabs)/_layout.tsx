@@ -3,13 +3,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import React from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { COLORS } from '../../lib/theme';
+
+const ACTIVE = '#40a3ea';    // biru primary
+const INACTIVE = '#6b7280';  // abu-abu gelap
+const BORDER = '#eceef1';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 function tabIcon(active: IconName, inactive: IconName) {
     return ({ color, focused }: { color: string; focused: boolean }) => (
-        <Ionicons name={focused ? active : inactive} size={22} color={color} />
+        <Ionicons name={focused ? active : inactive} size={24} color={color} />
     );
 }
 
@@ -21,12 +24,12 @@ export default function TabsLayout() {
         <Tabs
             screenOptions={{
                 headerShown: false,
-                tabBarActiveTintColor: COLORS.primary,
-                tabBarInactiveTintColor: COLORS.muted,
-                tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
+                tabBarActiveTintColor: ACTIVE,
+                tabBarInactiveTintColor: INACTIVE,
+                tabBarLabelStyle: { fontSize: 11, fontWeight: '700' },
                 tabBarStyle: {
-                    backgroundColor: COLORS.white,
-                    borderTopColor: COLORS.line,
+                    backgroundColor: '#ffffff',
+                    borderTopColor: BORDER,
                     borderTopWidth: 1,
                     height: 60 + bottom,
                     paddingTop: 8,
@@ -54,8 +57,6 @@ export default function TabsLayout() {
                 name="akun"
                 options={{ title: 'Akun', tabBarIcon: tabIcon('person', 'person-outline') }}
             />
-            {/* Kategori sekarang jadi filter di Produk, jadi tab lamanya disembunyikan */}
-            <Tabs.Screen name="kategori" options={{ href: null }} />
         </Tabs>
     );
 }

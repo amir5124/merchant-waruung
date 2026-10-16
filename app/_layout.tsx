@@ -1,6 +1,8 @@
 // app/_layout.tsx
 import { api, clearToken, getToken } from '../lib/api';
+import { registerPushToken } from '../lib/notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useRef, useState } from 'react';
@@ -8,24 +10,30 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 const PRIMARY = '#40a3ea';
 
-// Halaman tujuan setelah login, berdasarkan role
-function homeForRole(role?: string | null): string {
-    switch (role) {
-        case 'driver':
-            return '/driver-home';
-        case 'merchant':
-            return '/(tabs)';
-        default:
-            return '/(tabs)';
+async function hasCachedProfile(): Promise<boolean> {
+    try {
+        return !!(await AsyncStorage.getItem('profile'));
+    } catch {
+        return false;
     }
 }
 
-async function getCachedRole(): Promise<string | null> {
-    try {
-        const raw = await AsyncStorage.getItem('profile');
-        return raw ? JSON.parse(raw)?.role ?? null : null;
-    } catch {
-        return null;
+// ✅ Extend mapping notifikasi merchant
+function routeForNotification(data: Record<string, any> | undefined): string {
+    switch (data?.type) {
+        case 'merchant_new_order':
+            return '/(tabs)';
+
+        case 'merchant_order_cancelled':
+        case 'merchant_order_status':
+            return '/(tabs)/pesanan';
+
+        case 'merchant_payout_approved':
+        case 'merchant_payout_rejected':
+            return '/(tabs)/keuangan';
+
+        default:
+            return '/(tabs)/pesanan';
     }
 }
 
@@ -34,45 +42,41 @@ export default function RootLayout() {
     const segments = useSegments();
     const [ready, setReady] = useState(false);
 
-    // Token divalidasi ke server sekali saja saat app dibuka
     const validated = useRef(false);
+    const pushRegistered = useRef(false);
+    const handledNotifId = useRef<string | null>(null);
 
+    const lastResponse = Notifications.useLastNotificationResponse();
+
+    // ============================================================
+    // ✅ EFFECT 1: Validasi sesi SEKALI saat mount
+    // ============================================================
     useEffect(() => {
         let cancelled = false;
 
         (async () => {
+            console.log('[LAYOUT] Validate session...');
             let token = await getToken();
 
-            // 1. Validasi sesi sekali saat app dibuka
             if (token && !validated.current) {
                 validated.current = true;
                 try {
                     const profile = await api.me();
-                    await AsyncStorage.setItem('profile', JSON.stringify(profile));
+                    await AsyncStorage.setItem(
+                        'profile',
+                        JSON.stringify(profile)
+                    );
+                    console.log('[LAYOUT] ✅ Session valid');
                 } catch (err: any) {
-                    // Gagal (token kedaluwarsa atau jaringan putus).
-                    // Kalau ada profil cache, anggap masih login (mode offline);
-                    // kalau tidak, bersihkan sesi supaya diarahkan ke login.
-                    const cachedRole = await getCachedRole();
-                    if (!cachedRole) {
-                        console.warn('[AUTH] Sesi tidak valid:', err?.message);
+                    console.warn(
+                        '[LAYOUT] ⚠️ Session invalid:',
+                        err?.message
+                    );
+                    if (!(await hasCachedProfile())) {
                         await clearToken();
                         token = null;
                     }
                 }
-            }
-
-            if (cancelled) return;
-
-            // 2. Guard: arahkan sesuai status login
-            const inAuthGroup = (segments as string[])[0] === '(auth)';
-            const atRoot = (segments as string[]).length === 0;
-
-            if (!token && !inAuthGroup) {
-                router.replace('/(auth)/login' as any);
-            } else if (token && (inAuthGroup || atRoot)) {
-                const role = await getCachedRole();
-                if (!cancelled) router.replace(homeForRole(role) as any);
             }
 
             if (!cancelled) setReady(true);
@@ -81,17 +85,75 @@ export default function RootLayout() {
         return () => {
             cancelled = true;
         };
-        // Dijalankan ulang setiap pindah halaman, supaya setelah login/logout
-        // (token berubah) guard langsung menyesuaikan.
-    }, [segments]);
+    }, []);   // ← mount sekali saja
+
+    // ============================================================
+    // ✅ EFFECT 2: Guard navigasi — runs saat segments berubah
+    // ============================================================
+    useEffect(() => {
+        if (!ready) return;
+
+        (async () => {
+            const token = await getToken();
+            const inAuthGroup = (segments as string[])[0] === '(auth)';
+            const atRoot = (segments as string[]).length === 0;
+
+            if (!token && !inAuthGroup) {
+                console.log('[LAYOUT] → login (no token)');
+                router.replace('/(auth)/login' as any);
+            } else if (token && (inAuthGroup || atRoot)) {
+                console.log('[LAYOUT] → (tabs) (logged in)');
+                router.replace('/(tabs)' as any);
+            }
+
+            // Push notif — sekali per sesi
+            if (token && !pushRegistered.current) {
+                pushRegistered.current = true;
+                console.log('[LAYOUT] Register push token...');
+                registerPushToken().catch((e) =>
+                    console.warn(
+                        '[PUSH] Gagal registrasi:',
+                        e?.message
+                    )
+                );
+            }
+            if (!token) {
+                pushRegistered.current = false;
+                validated.current = false;   // ✅ reset saat logout
+            }
+        })();
+    }, [segments, ready]);
+
+    // ============================================================
+    // Tap notifikasi → redirect
+    // ============================================================
+    useEffect(() => {
+        if (!ready || !lastResponse) return;
+        if (
+            lastResponse.actionIdentifier !==
+            Notifications.DEFAULT_ACTION_IDENTIFIER
+        )
+            return;
+
+        const id = lastResponse.notification.request.identifier;
+        if (handledNotifId.current === id) return;
+        handledNotifId.current = id;
+
+        getToken().then((token) => {
+            if (!token) return;
+            const data = lastResponse.notification.request.content
+                .data as Record<string, any>;
+            const target = routeForNotification(data);
+            console.log('[notif] Tap → redirect ke:', target);
+            router.replace(target as any);
+        });
+    }, [lastResponse, ready]);
 
     return (
         <View style={{ flex: 1 }}>
             <StatusBar style="dark" />
             <Stack screenOptions={{ headerShown: false }} />
 
-            {/* Layar loading sampai status login diketahui,
-                supaya halaman yang salah tidak sempat berkedip */}
             {!ready && (
                 <View style={styles.splash}>
                     <ActivityIndicator size="large" color={PRIMARY} />
@@ -99,6 +161,32 @@ export default function RootLayout() {
             )}
         </View>
     );
+}
+
+// ============================================================
+// ✅ HELPER: Logout (panggil dari halaman akun)
+// ============================================================
+export async function handleLogout(
+    router: ReturnType<typeof useRouter>
+) {
+    try {
+        // 1. Clear FCM token di backend
+        try {
+            await api.updateProfile({ fcm_token: null as any });
+            console.log('[LOGOUT] ✅ FCM token cleared');
+        } catch (e) {
+            console.warn('[LOGOUT] ⚠️ Gagal clear fcm_token:', e);
+        }
+
+        // 2. Clear JWT & profil lokal
+        await clearToken();
+        await AsyncStorage.removeItem('profile');
+
+        // 3. Redirect
+        router.replace('/(auth)/login' as any);
+    } catch (err) {
+        console.error('[LOGOUT] Error:', err);
+    }
 }
 
 const styles = StyleSheet.create({
